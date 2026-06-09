@@ -1,0 +1,269 @@
+{% extends 'base.html' %}
+{% block title %}Preparação — Produtividade Banho{% endblock %}
+{% block content %}
+
+<div class="section-head">
+  <div class="section-title"><i class="bi bi-grid-3x3-gap-fill"></i>Cestos — toque para abrir</div>
+  <div class="small muted">
+    <span class="pill pill-prep">Preparando</span>
+    <span class="pill" style="background:#fdeaea;color:#b91c3c;">Pausado</span>
+    <span class="pill" style="background:#e9ecef;color:#475569;">Preencher</span>
+    <span class="pill pill-fila">Na fila</span>
+    <span class="pill pill-banho">Em banho</span>
+  </div>
+</div>
+
+<div id="grade" class="cestos-grid"><div class="muted small">Carregando cestos…</div></div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <div class="modal-head">
+      <h5><i class="bi bi-box-seam"></i>Cesto <span id="mCesto"></span></h5>
+      <button class="modal-x" onclick="fecharModal()"><i class="bi bi-x-lg"></i></button>
+    </div>
+    <div class="modal-body">
+
+      <!-- VIEW 1: cesto livre -> iniciar -->
+      <div id="viewIniciar" style="display:none;">
+        <p class="muted small" style="margin-bottom:18px;">Iniciar a preparação deste cesto agora. O cronômetro começa imediatamente.</p>
+        <button class="btn btn-aqua btn-block" onclick="iniciarPrep()"><i class="bi bi-play-fill"></i>Iniciar preparação</button>
+      </div>
+
+      <!-- VIEW 2: em preparação -> cronômetro + pausar + parar -->
+      <div id="viewCron" style="display:none;text-align:center;">
+        <div class="cron-big" id="cronBig">00:00</div>
+        <div class="cron-status" id="cronStatus"></div>
+        <div style="display:flex;gap:10px;margin-top:22px;">
+          <button class="btn btn-ghost" style="flex:1;" id="btnPausa" onclick="togglePausa()"></button>
+          <button class="btn btn-primary" style="flex:1;" onclick="pararTempo()"><i class="bi bi-stop-fill"></i>Parar tempo</button>
+        </div>
+        <p class="hint" style="margin-top:14px;">Use <strong>Pausar</strong> para café ou ginástica laboral — o tempo parado não conta. <strong>Parar tempo</strong> encerra a preparação para você preencher os dados.</p>
+      </div>
+
+      <!-- VIEW 3: preencher / editar -->
+      <div id="viewForm" style="display:none;">
+        <input type="hidden" id="fId">
+        <div id="cronInfo" class="alert alert-info" style="display:none;"><i class="bi bi-stopwatch"></i><span id="cronTxt"></span></div>
+
+        <div class="field">
+          <label class="label">Ordem (OP) — bipe o código de barras</label>
+          <div style="display:flex;gap:8px;">
+            <input type="text" id="fOrdem" class="input" placeholder="Escaneie ou digite a OP" inputmode="numeric" autocomplete="off" style="flex:1;">
+            <button class="btn btn-ghost btn-icon" onclick="buscarOrdem()" title="Buscar"><i class="bi bi-search"></i></button>
+          </div>
+          <div id="msgOrdem" class="hint"></div>
+        </div>
+
+        <div class="grid-2">
+          <div class="field" style="margin:0;"><label class="label">Código (Material)</label><input type="text" id="fMaterial" class="input input-sm"></div>
+          <div class="field" style="margin:0;"><label class="label">Quantidade total</label><input type="number" id="fQtd" class="input input-sm" inputmode="numeric"></div>
+          <div class="field col-full" style="margin:0;"><label class="label">Texto breve do material</label><input type="text" id="fTexto" class="input input-sm"></div>
+          <div class="field" style="margin:0;"><label class="label">Processo</label>
+            <select id="fProc" class="select input-sm"><option value="">Selecione…</option>{% for p in processos %}<option>{{ p }}</option>{% endfor %}</select>
+          </div>
+          <div class="field" style="margin:0;"><label class="label">Tipo</label>
+            <select id="fTipo" class="select input-sm"><option>Normal</option><option>Retrabalho</option></select>
+          </div>
+          <div class="field col-full" style="margin:0;"><label class="label">Observação</label><textarea id="fObs" class="input input-sm" rows="2"></textarea></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-foot" id="footForm" style="display:none;">
+      <button class="btn btn-ghost" onclick="fecharModal()" style="flex:0 0 auto;">Cancelar</button>
+      <button class="btn btn-primary" style="flex:1;" id="btnSalvar"></button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const ROTULO={PREPARANDO:'Preparando',PREENCHER:'Preencher',FILA_BANHO:'Na fila',EM_BANHO:'Em banho'};
+let modalEstado='';      // 'iniciar' | 'cron' | 'preencher' | 'editar'
+let cestoSel=0, cardAtual=null;
+
+function fmtTempo(s){const m=Math.floor(s/60),x=s%60;return `${String(m).padStart(2,'0')}:${String(x).padStart(2,'0')}`;}
+
+// tempo decorrido de preparação JÁ DESCONTANDO pausas
+function segPrep(cd){
+  if(!cd.prep_inicio_iso)return 0;
+  const ini=new Date(cd.prep_inicio_iso).getTime();
+  let pausa=cd.pausa_acumulada_seg||0;
+  if(cd.pausado && cd.pausa_inicio_iso){
+    pausa += Math.floor((Date.now()-new Date(cd.pausa_inicio_iso).getTime())/1000);
+  }
+  return Math.max(0, Math.floor((Date.now()-ini)/1000) - pausa);
+}
+
+async function carregar(){
+  const r=await fetch('/api/cestos'); const g=await r.json();
+  const el=document.getElementById('grade');
+  el.innerHTML=g.map(c=>{
+    if(!c.ocupado){
+      return `<button class="cesto livre" onclick="abrirLivre(${c.numero})">
+        <span class="cesto-num">${c.numero}</span><span class="cesto-tag">Livre</span></button>`;
+    }
+    const cd=c.card;
+    let cron='', cls='st-'+cd.estado, rotulo=ROTULO[cd.estado]||cd.estado;
+    if(cd.estado==='PREPARANDO'){
+      cron=`<span class="cesto-mini-cron prep-cron" data-card='${JSON.stringify(cd).replace(/'/g,"&#39;")}'>${fmtTempo(segPrep(cd))}</span>`;
+      if(cd.pausado){cls+=' is-paused';rotulo='Pausado';}
+    }else if(cd.estado==='EM_BANHO'&&cd.banho_inicio_iso){
+      const seg=Math.max(0,Math.floor((Date.now()-new Date(cd.banho_inicio_iso).getTime())/1000));
+      cron=`<span class="cesto-mini-cron cron-el" data-ini="${cd.banho_inicio_iso}">${fmtTempo(seg)}</span>`;
+    }
+    return `<button class="cesto ocupado ${cls}" onclick='abrirOcupado(${JSON.stringify(cd).replace(/'/g,"&#39;")})'>
+      <i class="bi ${cd.pausado?'bi-pause-circle-fill':'bi-lock-fill'} cesto-lock"></i>
+      <span class="cesto-num">${cd.numero_cesto}</span>
+      <span class="cesto-tag">${rotulo}</span>
+      ${cron}</button>`;
+  }).join('');
+}
+
+function tick(){
+  document.querySelectorAll('.cron-el[data-ini]').forEach(e=>{e.textContent=fmtTempo(Math.max(0,Math.floor((Date.now()-new Date(e.dataset.ini).getTime())/1000)));});
+  document.querySelectorAll('.prep-cron[data-card]').forEach(e=>{try{e.textContent=fmtTempo(segPrep(JSON.parse(e.dataset.card)));}catch(_){}});
+  if(modalEstado==='cron'&&cardAtual&&!cardAtual.pausado){document.getElementById('cronBig').textContent=fmtTempo(segPrep(cardAtual));}
+}
+
+function abrirLivre(num){
+  cestoSel=num; modalEstado='iniciar'; cardAtual=null;
+  document.getElementById('mCesto').textContent=num;
+  mostrarView('iniciar');
+  document.getElementById('modal').classList.add('open');
+}
+
+function abrirOcupado(cd){
+  cestoSel=cd.numero_cesto; cardAtual=cd;
+  document.getElementById('mCesto').textContent=cd.numero_cesto;
+  document.getElementById('modal').classList.add('open');
+  if(cd.estado==='PREPARANDO'){
+    modalEstado='cron';
+    mostrarView('cron');
+    atualizarBotaoPausa(cd.pausado);
+    document.getElementById('cronBig').textContent=fmtTempo(segPrep(cd));
+  }else{
+    preencherForm(cd);
+    if(cd.estado==='PREENCHER'){
+      modalEstado='preencher';
+      document.getElementById('btnSalvar').innerHTML='<i class="bi bi-check2-circle"></i>Concluir e enviar ao banho';
+      document.getElementById('cronInfo').style.display='flex';
+      document.getElementById('cronTxt').textContent=`Tempo de preparação: ${cd.prep_minutos} min (já parado)`;
+      setTimeout(()=>document.getElementById('fOrdem').focus(),300);
+    }else{
+      modalEstado='editar';
+      document.getElementById('btnSalvar').innerHTML='<i class="bi bi-save"></i>Salvar correções';
+      document.getElementById('cronInfo').style.display='flex';
+      document.getElementById('cronTxt').textContent = cd.estado==='FILA_BANHO'
+        ? `Na fila do banho · preparação levou ${cd.prep_minutos} min`
+        : `Em banho agora · iniciado às ${cd.banho_inicio}`;
+    }
+    mostrarView('form');
+  }
+}
+
+function mostrarView(v){
+  document.getElementById('viewIniciar').style.display = v==='iniciar'?'block':'none';
+  document.getElementById('viewCron').style.display    = v==='cron'?'block':'none';
+  document.getElementById('viewForm').style.display    = v==='form'?'block':'none';
+  document.getElementById('footForm').style.display    = v==='form'?'flex':'none';
+}
+
+function preencherForm(cd){
+  document.getElementById('fId').value=cd.id;
+  document.getElementById('fOrdem').value=cd.ordem||'';
+  document.getElementById('fMaterial').value=cd.material||'';
+  document.getElementById('fTexto').value=cd.texto_breve||'';
+  document.getElementById('fQtd').value=cd.quantidade||'';
+  document.getElementById('fProc').value=cd.processo||'';
+  document.getElementById('fTipo').value=cd.tipo||'Normal';
+  document.getElementById('fObs').value=cd.observacao||'';
+  document.getElementById('msgOrdem').innerHTML='';
+}
+
+function atualizarBotaoPausa(pausado){
+  const b=document.getElementById('btnPausa'), s=document.getElementById('cronStatus'), big=document.getElementById('cronBig');
+  if(pausado){
+    b.innerHTML='<i class="bi bi-play-fill"></i>Retomar'; b.className='btn btn-aqua'; b.style.flex='1';
+    s.innerHTML='<span class="txt-err"><i class="bi bi-pause-circle-fill"></i> Em pausa</span>';
+    big.classList.add('paused');
+  }else{
+    b.innerHTML='<i class="bi bi-pause-fill"></i>Pausar'; b.className='btn btn-ghost'; b.style.flex='1';
+    s.innerHTML='<span class="txt-ok"><i class="bi bi-stopwatch"></i> Cronometrando</span>';
+    big.classList.remove('paused');
+  }
+}
+
+function fecharModal(){document.getElementById('modal').classList.remove('open');modalEstado='';cardAtual=null;}
+
+async function iniciarPrep(){
+  const j=await (await fetch('/api/prep/iniciar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({numero_cesto:cestoSel})})).json();
+  if(j.sucesso){fecharModal();carregar();}else alert(j.erro);
+}
+
+async function togglePausa(){
+  if(!cardAtual)return;
+  const j=await (await fetch('/api/prep/pausar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:cardAtual.id})})).json();
+  if(j.sucesso){
+    const g=await (await fetch('/api/cestos')).json();
+    const c=g.find(x=>x.ocupado&&x.card.id===cardAtual.id);
+    if(c){cardAtual=c.card;atualizarBotaoPausa(cardAtual.pausado);document.getElementById('cronBig').textContent=fmtTempo(segPrep(cardAtual));}
+    carregar();
+  }
+}
+
+async function pararTempo(){
+  if(!cardAtual)return;
+  const j=await (await fetch('/api/prep/parar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:cardAtual.id})})).json();
+  if(j.sucesso){
+    cardAtual.estado='PREENCHER'; cardAtual.prep_minutos=j.prep_minutos;
+    abrirOcupado(cardAtual);
+    carregar();
+  }else alert(j.erro);
+}
+
+let opTimer;
+document.getElementById('fOrdem').addEventListener('input',()=>{clearTimeout(opTimer);opTimer=setTimeout(buscarOrdem,350);});
+document.getElementById('fOrdem').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();buscarOrdem();}});
+
+async function buscarOrdem(){
+  const ordem=document.getElementById('fOrdem').value.trim();
+  const msg=document.getElementById('msgOrdem');
+  if(!ordem)return;
+  const j=await (await fetch('/api/buscar_ordem/'+encodeURIComponent(ordem))).json();
+  if(j.encontrado){
+    document.getElementById('fMaterial').value=j.material||'';
+    document.getElementById('fTexto').value=j.texto_breve||'';
+    document.getElementById('fQtd').value=j.quantidade||'';
+    msg.innerHTML='<span class="txt-ok"><i class="bi bi-check-circle-fill"></i> OP encontrada — campos preenchidos (editáveis).</span>';
+  }else{
+    msg.innerHTML='<span class="txt-warn"><i class="bi bi-exclamation-circle"></i> OP não está na lista mestra. Preencha manualmente.</span>';
+  }
+}
+
+async function salvar(){
+  const payload={
+    id:document.getElementById('fId').value,
+    ordem:document.getElementById('fOrdem').value.trim(),
+    material:document.getElementById('fMaterial').value.trim(),
+    texto_breve:document.getElementById('fTexto').value.trim(),
+    quantidade:document.getElementById('fQtd').value,
+    processo:document.getElementById('fProc').value,
+    tipo:document.getElementById('fTipo').value,
+    observacao:document.getElementById('fObs').value.trim(),
+  };
+  const url = modalEstado==='preencher' ? '/api/prep/finalizar' : '/api/card/editar';
+  const j=await (await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
+  if(j.sucesso){fecharModal();carregar();}
+  else document.getElementById('msgOrdem').innerHTML=`<span class="txt-err">${j.erro}</span>`;
+}
+document.getElementById('btnSalvar').addEventListener('click',salvar);
+document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal')fecharModal();});
+
+carregar();
+setInterval(carregar,5000);
+setInterval(tick,1000);
+</script>
+{% endblock %}
