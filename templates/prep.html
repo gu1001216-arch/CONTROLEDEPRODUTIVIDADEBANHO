@@ -1,0 +1,210 @@
+{% extends 'base.html' %}
+{% block title %}Preparação — Produtividade Banho{% endblock %}
+{% block content %}
+
+<div class="section-head">
+  <div class="section-title"><i class="bi bi-grid-3x3-gap-fill"></i>Cestos — toque para abrir</div>
+  <div class="small muted"><span class="pill pill-prep">Preparando</span> <span class="pill pill-fila">Na fila</span> <span class="pill pill-banho">Em banho</span></div>
+</div>
+
+<div id="grade" class="cestos-grid"><div class="muted small">Carregando cestos…</div></div>
+
+<!-- Modal: ações do cesto -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <div class="modal-head">
+      <h5><i class="bi bi-box-seam"></i>Cesto <span id="mCesto"></span></h5>
+      <button class="modal-x" onclick="fecharModal()"><i class="bi bi-x-lg"></i></button>
+    </div>
+    <div class="modal-body">
+      <!-- estado: cesto livre -> iniciar -->
+      <div id="viewIniciar" style="display:none;">
+        <p class="muted small" style="margin-bottom:18px;">Iniciar a preparação deste cesto agora. O cronômetro começa imediatamente.</p>
+        <button class="btn btn-aqua btn-block" onclick="iniciarPrep()"><i class="bi bi-play-fill"></i>Iniciar preparação</button>
+      </div>
+
+      <!-- estado: preencher / editar -->
+      <div id="viewForm" style="display:none;">
+        <input type="hidden" id="fId">
+        <div id="cronInfo" class="alert alert-info" style="display:none;"><i class="bi bi-stopwatch"></i><span id="cronTxt"></span></div>
+
+        <div class="field">
+          <label class="label">Ordem (OP) — bipe o código de barras</label>
+          <div style="display:flex;gap:8px;">
+            <input type="text" id="fOrdem" class="input" placeholder="Escaneie ou digite a OP" inputmode="numeric" autocomplete="off" style="flex:1;">
+            <button class="btn btn-ghost btn-icon" onclick="buscarOrdem()" title="Buscar"><i class="bi bi-search"></i></button>
+          </div>
+          <div id="msgOrdem" class="hint"></div>
+        </div>
+
+        <div class="grid-2">
+          <div class="field" style="margin:0;">
+            <label class="label">Código (Material)</label>
+            <input type="text" id="fMaterial" class="input input-sm">
+          </div>
+          <div class="field" style="margin:0;">
+            <label class="label">Quantidade total</label>
+            <input type="number" id="fQtd" class="input input-sm" inputmode="numeric">
+          </div>
+          <div class="field col-full" style="margin:0;">
+            <label class="label">Texto breve do material</label>
+            <input type="text" id="fTexto" class="input input-sm">
+          </div>
+          <div class="field" style="margin:0;">
+            <label class="label">Processo</label>
+            <select id="fProc" class="select input-sm">
+              <option value="">Selecione…</option>
+              {% for p in processos %}<option>{{ p }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="field" style="margin:0;">
+            <label class="label">Tipo</label>
+            <select id="fTipo" class="select input-sm">
+              <option>Normal</option><option>Retrabalho</option>
+            </select>
+          </div>
+          <div class="field col-full" style="margin:0;">
+            <label class="label">Observação</label>
+            <textarea id="fObs" class="input input-sm" rows="2"></textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot" id="footForm" style="display:none;">
+      <button class="btn btn-ghost" onclick="fecharModal()" style="flex:0 0 auto;">Cancelar</button>
+      <button class="btn btn-primary" style="flex:1;" id="btnSalvar"></button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const ROTULO={PREPARANDO:'Preparando',FILA_BANHO:'Na fila',EM_BANHO:'Em banho'};
+let modalEstado='';  // 'iniciar' | 'preencher' | 'editar'
+let cestoSel=0;
+
+function fmtTempo(s){const m=Math.floor(s/60),x=s%60;return `${String(m).padStart(2,'0')}:${String(x).padStart(2,'0')}`;}
+
+async function carregar(){
+  const r=await fetch('/api/cestos'); const g=await r.json();
+  const el=document.getElementById('grade');
+  const agora=Date.now();
+  el.innerHTML=g.map(c=>{
+    if(!c.ocupado){
+      return `<button class="cesto livre" onclick="abrirLivre(${c.numero})">
+        <span class="cesto-num">${c.numero}</span><span class="cesto-tag">Livre</span></button>`;
+    }
+    const cd=c.card;
+    let cron='';
+    if(cd.estado==='PREPARANDO'&&cd.prep_inicio_iso){
+      const seg=Math.max(0,Math.floor((agora-new Date(cd.prep_inicio_iso).getTime())/1000));
+      cron=`<span class="cesto-mini-cron cron-el" data-ini="${cd.prep_inicio_iso}">${fmtTempo(seg)}</span>`;
+    }else if(cd.estado==='EM_BANHO'&&cd.banho_inicio_iso){
+      const seg=Math.max(0,Math.floor((agora-new Date(cd.banho_inicio_iso).getTime())/1000));
+      cron=`<span class="cesto-mini-cron cron-el" data-ini="${cd.banho_inicio_iso}">${fmtTempo(seg)}</span>`;
+    }
+    return `<button class="cesto ocupado st-${cd.estado}" onclick='abrirOcupado(${JSON.stringify(cd).replace(/'/g,"&#39;")})'>
+      <i class="bi bi-lock-fill cesto-lock"></i>
+      <span class="cesto-num">${c.numero}</span>
+      <span class="cesto-tag">${ROTULO[cd.estado]||cd.estado}</span>
+      ${cron}</button>`;
+  }).join('');
+}
+function tick(){const a=Date.now();document.querySelectorAll('.cron-el[data-ini]').forEach(e=>{e.textContent=fmtTempo(Math.max(0,Math.floor((a-new Date(e.dataset.ini).getTime())/1000)));});}
+
+function abrirLivre(num){
+  cestoSel=num; modalEstado='iniciar';
+  document.getElementById('mCesto').textContent=num;
+  document.getElementById('viewIniciar').style.display='block';
+  document.getElementById('viewForm').style.display='none';
+  document.getElementById('footForm').style.display='none';
+  document.getElementById('modal').classList.add('open');
+}
+
+function abrirOcupado(cd){
+  cestoSel=cd.numero_cesto;
+  document.getElementById('mCesto').textContent=cd.numero_cesto;
+  document.getElementById('viewIniciar').style.display='none';
+  document.getElementById('viewForm').style.display='block';
+  document.getElementById('footForm').style.display='flex';
+  document.getElementById('modal').classList.add('open');
+  // preenche form
+  document.getElementById('fId').value=cd.id;
+  document.getElementById('fOrdem').value=cd.ordem||'';
+  document.getElementById('fMaterial').value=cd.material||'';
+  document.getElementById('fTexto').value=cd.texto_breve||'';
+  document.getElementById('fQtd').value=cd.quantidade||'';
+  document.getElementById('fProc').value=cd.processo||'';
+  document.getElementById('fTipo').value=cd.tipo||'Normal';
+  document.getElementById('fObs').value=cd.observacao||'';
+  document.getElementById('msgOrdem').innerHTML='';
+  const ci=document.getElementById('cronInfo'), ct=document.getElementById('cronTxt');
+  if(cd.estado==='PREPARANDO'){
+    modalEstado='preencher';
+    document.getElementById('btnSalvar').innerHTML='<i class="bi bi-check2-circle"></i>Concluir e enviar ao banho';
+    ci.style.display='none';
+    setTimeout(()=>document.getElementById('fOrdem').focus(),300);
+  }else{
+    modalEstado='editar';
+    document.getElementById('btnSalvar').innerHTML='<i class="bi bi-save"></i>Salvar correções';
+    ci.style.display='flex';
+    ct.textContent = cd.estado==='FILA_BANHO'
+      ? `Na fila do banho · preparação levou ${cd.prep_minutos} min` 
+      : `Em banho agora · iniciado às ${cd.banho_inicio}`;
+  }
+}
+function fecharModal(){document.getElementById('modal').classList.remove('open');}
+
+async function iniciarPrep(){
+  const r=await fetch('/api/prep/iniciar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({numero_cesto:cestoSel})});
+  const j=await r.json();
+  if(j.sucesso){ fecharModal(); carregar(); }
+  else alert(j.erro);
+}
+
+let opTimer;
+document.getElementById('fOrdem').addEventListener('input',()=>{clearTimeout(opTimer);opTimer=setTimeout(buscarOrdem,350);});
+document.getElementById('fOrdem').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();buscarOrdem();}});
+
+async function buscarOrdem(){
+  const ordem=document.getElementById('fOrdem').value.trim();
+  const msg=document.getElementById('msgOrdem');
+  if(!ordem)return;
+  const r=await fetch('/api/buscar_ordem/'+encodeURIComponent(ordem));
+  const j=await r.json();
+  if(j.encontrado){
+    document.getElementById('fMaterial').value=j.material||'';
+    document.getElementById('fTexto').value=j.texto_breve||'';
+    document.getElementById('fQtd').value=j.quantidade||'';
+    msg.innerHTML='<span class="txt-ok"><i class="bi bi-check-circle-fill"></i> OP encontrada — campos preenchidos (editáveis).</span>';
+  }else{
+    msg.innerHTML='<span class="txt-warn"><i class="bi bi-exclamation-circle"></i> OP não está na lista mestra. Preencha manualmente.</span>';
+  }
+}
+
+async function salvar(){
+  const payload={
+    id:document.getElementById('fId').value,
+    ordem:document.getElementById('fOrdem').value.trim(),
+    material:document.getElementById('fMaterial').value.trim(),
+    texto_breve:document.getElementById('fTexto').value.trim(),
+    quantidade:document.getElementById('fQtd').value,
+    processo:document.getElementById('fProc').value,
+    tipo:document.getElementById('fTipo').value,
+    observacao:document.getElementById('fObs').value.trim(),
+  };
+  const url = modalEstado==='preencher' ? '/api/prep/finalizar' : '/api/card/editar';
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const j=await r.json();
+  if(j.sucesso){ fecharModal(); carregar(); }
+  else document.getElementById('msgOrdem').innerHTML=`<span class="txt-err">${j.erro}</span>`;
+}
+document.getElementById('btnSalvar').addEventListener('click',salvar);
+document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal')fecharModal();});
+
+carregar();
+setInterval(carregar,5000);
+setInterval(tick,1000);
+</script>
+{% endblock %}
