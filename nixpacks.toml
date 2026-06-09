@@ -1,0 +1,11 @@
+# Força o Railway a reconhecer o projeto como Python e instalar as dependências.
+providers = ["python"]
+
+[phases.setup]
+nixPkgs = ["python312", "gcc"]
+
+[phases.install]
+cmds = ["pip install --upgrade pip", "pip install -r requirements.txt"]
+
+[start]
+cmd = "gunicorn app:app --workers 2 --threads 4 --timeout 300 --bind 0.0.0.0:$PORT"
